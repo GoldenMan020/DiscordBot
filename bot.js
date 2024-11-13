@@ -1,23 +1,30 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
+const { Player } = require('discord-player');
 const axios = require('axios');
 const db = require('./db');
 
-// Initialize the bot
+// Initialize bot and player
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ]
+        GatewayIntentBits.MessageContent,
+    ],
 });
+const player = new Player(client);
 
-// Event: Bot is Ready
+// Event: Bot Ready
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
 });
 
-// Command: Set Fitness Goal
+//
+// FITNESS COMMANDS
+//
+
+// Set Fitness Goal
 client.on('messageCreate', (message) => {
     if (message.content.startsWith('!setgoal')) {
         const goal = message.content.replace('!setgoal ', '').trim();
@@ -29,7 +36,7 @@ client.on('messageCreate', (message) => {
 
         const userId = message.author.id;
         db.prepare(`
-            INSERT INTO users (id, goal) VALUES (?, ?)
+            INSERT INTO fitness_users (id, goal) VALUES (?, ?)
             ON CONFLICT(id) DO UPDATE SET goal = ?
         `).run(userId, goal, goal);
 
@@ -37,7 +44,7 @@ client.on('messageCreate', (message) => {
     }
 });
 
-// Command: Log Activity
+// Log Activity
 client.on('messageCreate', (message) => {
     if (message.content.startsWith('!logactivity')) {
         const args = message.content.replace('!logactivity ', '').trim().split(' ');
@@ -58,20 +65,20 @@ client.on('messageCreate', (message) => {
         const date = new Date().toISOString().split('T')[0];
 
         db.prepare(`
-            INSERT INTO logs (id, type, duration, date) VALUES (?, ?, ?, ?)
+            INSERT INTO fitness_logs (id, type, duration, date) VALUES (?, ?, ?, ?)
         `).run(userId, type, durationInt, date);
 
         message.reply(`Logged ${durationInt} minutes of ${type}! Keep it up! 💪`);
     }
 });
 
-// Command: View Progress
+// View Progress
 client.on('messageCreate', (message) => {
     if (message.content === '!progress') {
         const userId = message.author.id;
 
         const rows = db.prepare(`
-            SELECT type, SUM(duration) as total FROM logs
+            SELECT type, SUM(duration) as total FROM fitness_logs
             WHERE id = ? GROUP BY type
         `).all(userId);
 
@@ -79,56 +86,145 @@ client.on('messageCreate', (message) => {
             message.reply('No progress logged yet! Use `!logactivity` to get started.');
         } else {
             const progress = rows.map(row => `${row.type}: ${row.total} minutes`).join('\n');
-            const embed = new EmbedBuilder()
-                .setColor(0x0099ff)
-                .setTitle(`${message.author.username}'s Progress`)
-                .setDescription(progress)
-                .setFooter({ text: 'Keep pushing towards your goal!' });
-
-            message.reply({ embeds: [embed] });
+            message.reply(`Your progress:\n${progress}`);
         }
     }
 });
 
-// Command: Motivation
+// Motivation
 client.on('messageCreate', async (message) => {
     if (message.content === '!motivation') {
         try {
             const response = await axios.get(
                 `https://api.giphy.com/v1/gifs/random?tag=fitness&rating=g&api_key=${process.env.GIPHY_API_KEY}`
             );
-
             const gifUrl = response.data.data.images.original.url;
-            const embed = new EmbedBuilder()
-                .setColor(0xff5733)
-                .setTitle('Here’s your fitness motivation for today! 💪')
-                .setImage(gifUrl);
-
-            message.reply({ embeds: [embed] });
+            message.reply(`Here’s your fitness motivation! 💪\n${gifUrl}`);
         } catch (error) {
-            console.error(error.message);
             message.reply('Could not fetch a motivational image. Try again later.');
         }
     }
 });
 
-client.on('messageCreate', (message) => {
-    if (message.content === '!help') {
-        const embed = new EmbedBuilder()
-            .setColor(0x0099ff)
-            .setTitle('Fitness Bot Commands')
-            .setDescription(
-                '`!setgoal <goal>` - Set your fitness goal\n' +
-                '`!logactivity <type> <duration_in_minutes>` - Log your activity\n' +
-                '`!progress` - View your progress\n' +
-                '`!motivation` - Get a motivational image\n' +
-                '`!help` - Show this help message'
-            )
-            .setFooter({ text: 'Stay fit and healthy!' });
+//
+// MUSIC COMMANDS
+//
 
-        message.reply({ embeds: [embed] });
+// Create Playlist
+client.on('messageCreate', (message) => {
+    if (message.content.startsWith('!createplaylist')) {
+        const playlistName = message.content.replace('!createplaylist ', '').trim();
+
+        if (!playlistName) {
+            message.reply('Please provide a name for your playlist! Example: `!createplaylist MyPlaylist`');
+            return;
+        }
+
+        const userId = message.author.id;
+
+        try {
+            db.prepare(`
+                INSERT INTO playlists (user_id, playlist_name, songs)
+                VALUES (?, ?, ?)
+            `).run(userId, playlistName, JSON.stringify([]));
+            message.reply(`Playlist "${playlistName}" created successfully!`);
+        } catch (error) {
+            message.reply(`A playlist with the name "${playlistName}" already exists.`);
+        }
     }
 });
 
-// Start the bot
+// Add Song
+client.on('messageCreate', async (message) => {
+    if (message.content.startsWith('!addsong')) {
+        const [command, playlistName, ...songQuery] = message.content.split(' ');
+        const songName = songQuery.join(' ');
+
+        if (!playlistName || !songName) {
+            message.reply('Usage: `!addsong <playlist_name> <song_name>`');
+            return;
+        }
+
+        const userId = message.author.id;
+        const playlist = db
+            .prepare(`SELECT songs FROM playlists WHERE user_id = ? AND playlist_name = ?`)
+            .get(userId, playlistName);
+
+        if (!playlist) {
+            message.reply(`Playlist "${playlistName}" not found!`);
+            return;
+        }
+
+        const songs = JSON.parse(playlist.songs);
+        songs.push(songName);
+
+        db.prepare(`
+            UPDATE playlists SET songs = ? WHERE user_id = ? AND playlist_name = ?
+        `).run(JSON.stringify(songs), userId, playlistName);
+
+        message.reply(`Added "${songName}" to "${playlistName}"!`);
+    }
+});
+
+// Play Music
+client.on('messageCreate', async (message) => {
+    if (message.content.startsWith('!play')) {
+        const songName = message.content.replace('!play ', '').trim();
+
+        if (!songName) {
+            message.reply('Please provide a song name to play!');
+            return;
+        }
+
+        const voiceChannel = message.member?.voice?.channel;
+        if (!voiceChannel) {
+            message.reply('You need to be in a voice channel to play music!');
+            return;
+        }
+
+        const searchResult = await player.search(songName, {
+            requestedBy: message.author,
+        });
+
+        if (!searchResult || !searchResult.tracks.length) {
+            message.reply('No results found for your query!');
+            return;
+        }
+
+        const queue = player.createQueue(message.guild, {
+            metadata: {
+                channel: message.channel,
+            },
+        });
+
+        try {
+            if (!queue.connection) await queue.connect(voiceChannel);
+        } catch {
+            player.deleteQueue(message.guild.id);
+            message.reply('Could not join your voice channel!');
+            return;
+        }
+
+        message.reply(`🎶 Now playing: **${searchResult.tracks[0].title}**`);
+        queue.addTrack(searchResult.tracks[0]);
+        if (!queue.playing) await queue.play();
+    }
+});
+
+// Stop Music
+client.on('messageCreate', (message) => {
+    if (message.content === '!stop') {
+        const queue = player.getQueue(message.guild);
+
+        if (!queue || !queue.playing) {
+            message.reply('No music is currently playing!');
+            return;
+        }
+
+        queue.destroy();
+        message.reply('Stopped the music and cleared the queue.');
+    }
+});
+
+// Start Bot
 client.login(process.env.DISCORD_TOKEN);

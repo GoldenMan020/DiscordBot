@@ -1,10 +1,13 @@
 {
   "dependencies": {
+    "@discordjs/voice": "^0.17.0",
     "axios": "^1.7.7",
     "better-sqlite3": "^11.5.0",
+    "discord-player": "^6.7.1",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "youtube-sr": "^4.3.11"
   },
   "name": "discordbot",
   "version": "1.0.0",
