@@ -112,5 +112,23 @@ client.on('messageCreate', async (message) => {
     }
 });
 
+client.on('messageCreate', (message) => {
+    if (message.content === '!help') {
+        const embed = new EmbedBuilder()
+            .setColor(0x0099ff)
+            .setTitle('Fitness Bot Commands')
+            .setDescription(
+                '`!setgoal <goal>` - Set your fitness goal\n' +
+                '`!logactivity <type> <duration_in_minutes>` - Log your activity\n' +
+                '`!progress` - View your progress\n' +
+                '`!motivation` - Get a motivational image\n' +
+                '`!help` - Show this help message'
+            )
+            .setFooter({ text: 'Stay fit and healthy!' });
+
+        message.reply({ embeds: [embed] });
+    }
+});
+
 // Start the bot
 client.login(process.env.DISCORD_TOKEN);
